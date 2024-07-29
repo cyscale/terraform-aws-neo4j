@@ -2,8 +2,11 @@
 sleep 30
 
 # Upgrade to the latest Amazon Linux 2023
-dnf upgrade -y --releasever=2023.2.20231113
+dnf upgrade -y --releasever=2023.5.20240722
 update-motd
+
+# https://docs.aws.amazon.com/linux/al2023/ug/managing-repos-os-updates.html#automatic-restart-services
+dnf install smart-restart -y
 
 # Forward all logs to the console
 exec > >(tee /var/log/user-data.log | logger -t user-data-extra -s 2>/dev/console) 2>&1
@@ -50,11 +53,11 @@ export NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
 PACKAGE_VERSION=$(curl --fail http://versions.neo4j-templates.com/target.json | jq -r ".aws[\"$NEO4J_MAJOR\"]" || echo "")
 if [[ ! -z $PACKAGE_VERSION && $PACKAGE_VERSION != "null" ]]; then
   echo " - [ Found PACKAGE_VERSION from http://versions.neo4j-templates.com : PACKAGE_VERSION=$PACKAGE_VERSION ] - "
-  yum install -y neo4j-enterprise-$PACKAGE_VERSION
+  dnf install -y neo4j-enterprise-$PACKAGE_VERSION
   sleep 1
 else
   echo '- [ Failed to resolve Neo4j version from http://versions.neo4j-templates.com, using PACKAGE_VERSION=latest ] - '
-  yum install -y "neo4j-enterprise"
+  dnf install -y "neo4j-enterprise"
 fi
 
 systemctl enable neo4j
@@ -146,7 +149,7 @@ service neo4j start
 neo4j-admin dbms set-initial-password "$NEO4J_PASSWORD"
 
 # Setup neo4j-admin (online) backups
-yum install cronie -y
+dnf install cronie -y
 systemctl enable crond.service
 systemctl start crond.service
 pushd /home/ec2-user

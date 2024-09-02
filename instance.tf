@@ -17,6 +17,10 @@ locals {
       backup_bucket         = var.backup_bucket
     }
   )
+  tags = {
+    Name      = "${var.prefix}-instance"
+    Terraform = true
+  }
 }
 
 resource "aws_ssm_parameter" "cw_agent" {
@@ -47,14 +51,10 @@ resource "aws_instance" "neo4j_instance" {
     volume_size = var.volume_size
     encrypted   = true
     volume_type = "gp3"
+    tags        = merge(data.aws_default_tags.this.tags, local.tags)
   }
 
-  tags = {
-    Name      = "${var.prefix}-instance"
-    Terraform = true
-  }
-
-  volume_tags = data.aws_default_tags.this.tags
+  tags = local.tags
 
   // only set to true when developing/debugging.
   user_data_replace_on_change = false

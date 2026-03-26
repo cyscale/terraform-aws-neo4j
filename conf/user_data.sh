@@ -1,21 +1,13 @@
 #!/bin/bash -xe
 sleep 30
 
-# Upgrade to the latest Amazon Linux 2023
-dnf upgrade -y --releasever=2023.5.20240722
-update-motd
-
+# 0 - prepare system and install dependencies
 # https://docs.aws.amazon.com/linux/al2023/ug/managing-repos-os-updates.html#automatic-restart-services
-dnf install smart-restart -y
+dnf update -y
+dnf install -y smart-restart
 
 # Forward all logs to the console
 exec > >(tee /var/log/user-data.log | logger -t user-data-extra -s 2>/dev/console) 2>&1
-
-# Configure Cloudwatch agent
-pushd /tmp
-wget -q https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
-rpm -U ./amazon-cloudwatch-agent.rpm
-popd
 
 # Setup the prometheus scraping for neo4j
 aws ssm get-parameter --name ${ssm_prometheus} --output=text --query "Parameter.Value" >/opt/aws/amazon-cloudwatch-agent/etc/prometheus.yml
@@ -30,34 +22,37 @@ aws ssm get-parameter --name ${ssm_prometheus} --output=text --query "Parameter.
 NEO4J_PASSWORD=${neo4j_password}
 NEO4J_MAJOR=${neo4j_major_version}
 TARGET_REGION=${target_region}
-THIS_INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+THIS_INSTANCE_ID=$(ec2-metadata -i | awk -F ': ' '{print $2}')
 PREFIX=${prefix}
 APOC_VERSION="" # This will be set based on the Neo4j version
 BACKUP_DIR="/home/ec2-user/backups"
 BACKUP_BUCKET=${backup_bucket}
+FQDN=$(ec2-metadata -h | awk -F ': ' '{print $2}')
 
-function aws_get_private_fqdn {
-  aws ec2 describe-instances --output=text --region=$TARGET_REGION --filters Name=tag:Terraform,Values=true --filters Name=tag:Name,Values=$PREFIX-instance --query "Reservations[].Instances[].PrivateDnsName"
-}
+# 2 - Install Neo4j using dnf and setup repository
+dnf install -y java-25-amazon-corretto-headless
 
-function aws_get_private_ips {
-  aws ec2 describe-instances --output=text --region=$TARGET_REGION --filters Name=tag:Terraform,Values=true --filters Name=tag:Name,Values=$PREFIX-instance --query "Reservations[].Instances[].PrivateIpAddress"
-}
-
-FQDN=$(aws_get_private_fqdn)
-
-# 2 - Install Neo4j using yum
 echo " - [ Installing Graph Database ] - "
 export NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
 
-PACKAGE_VERSION=$(curl --fail http://versions.neo4j-templates.com/target.json | jq -r ".aws[\"$NEO4J_MAJOR\"]" || echo "")
+rpm --import https://debian.neo4j.com/neotechnology.gpg.key
+
+cat <<EOF > /etc/yum.repos.d/neo4j.repo
+[neo4j]
+name=Neo4j RPM Repository
+baseurl=https://yum.neo4j.com/stable/latest
+enabled=1
+gpgcheck=1
+EOF
+
+PACKAGE_VERSION=$(curl -s --fail http://versions.neo4j-templates.com/target.json | jq -r ".aws[\"$NEO4J_MAJOR\"]" || echo "")
 if [[ ! -z $PACKAGE_VERSION && $PACKAGE_VERSION != "null" ]]; then
   echo " - [ Found PACKAGE_VERSION from http://versions.neo4j-templates.com : PACKAGE_VERSION=$PACKAGE_VERSION ] - "
   dnf install -y neo4j-enterprise-$PACKAGE_VERSION
   sleep 1
 else
   echo '- [ Failed to resolve Neo4j version from http://versions.neo4j-templates.com, using PACKAGE_VERSION=latest ] - '
-  dnf install -y "neo4j-enterprise"
+  dnf install -y neo4j-enterprise
 fi
 
 systemctl enable neo4j
@@ -75,7 +70,7 @@ echo "dbms.security.procedures.allowlist=apoc.*" >>/etc/neo4j/neo4j.conf
 
 # 4 - Neo4j Main Configuration
 echo " - [ Neo4j Main (Network & Cluster Configuration ] - "
-THIS_PRIVATE_IP="$(hostname -i | awk '{print $NF}')"
+THIS_PRIVATE_IP=$(ec2-metadata -o | awk -F ': ' '{print $2}')
 sed -i s/#server.default_listen_address=0.0.0.0/server.default_listen_address=0.0.0.0/g /etc/neo4j/neo4j.conf
 sed -i s/#server.default_advertised_address=localhost/server.default_advertised_address="$FQDN"/g /etc/neo4j/neo4j.conf
 sed -i s/#server.discovery.advertised_address=:5000/server.discovery.advertised_address="$THIS_PRIVATE_IP":5000/g /etc/neo4j/neo4j.conf
@@ -123,7 +118,7 @@ echo 'apoc.initializer.neo4j.4=CALL apoc.uuid.install("Asset", {uuidProperty: "i
 echo 'apoc.initializer.neo4j.5=CALL apoc.uuid.install("PolicyEntity", {uuidProperty: "identifier", addToExistingNodes: false})' >>/etc/neo4j/apoc.conf
 echo 'apoc.initializer.neo4j.6=CALL apoc.uuid.install("ResultEntity", {uuidProperty: "identifier", addToExistingNodes: false})' >>/etc/neo4j/apoc.conf
 echo 'apoc.initializer.neo4j.7=CALL apoc.uuid.install("Attribute", {uuidProperty: "identifier", addToExistingNodes: false})' >>/etc/neo4j/apoc.conf
-echo 'apoc.initializer.neo4j.8=CREATE FULLTEXT INDEX search_index IF NOT EXISTS FOR (n:Asset|PolicyEntity|Vulnerability|VulnerablePackage) ON EACH [n.idFromProvider, n.name, n.slug, n.internalName, n.vulnID] OPTIONS {indexConfig: {`fulltext.eventually_consistent`: true}}' >>/etc/neo4j/apoc.conf
+echo 'apoc.initializer.neo4j.8=CREATE FULLTEXT INDEX search_index IF NOT EXISTS FOR (n:Asset|PolicyEntity|Vulnerability|VulnerablePackage) ON EACH [n.idFromProvider, n.name, n.slug, n.internalName, n.internalAssetType, n.assetCategory, n.cloudProvider, n.vulnID] OPTIONS {indexConfig: {`fulltext.eventually_consistent`: true}}' >>/etc/neo4j/apoc.conf
 echo 'apoc.initializer.neo4j.9=CREATE INDEX iamPermission_name IF NOT EXISTS FOR (n:IAMPermission) ON (n.name)' >>/etc/neo4j/apoc.conf
 echo 'apoc.initializer.neo4j.10=CREATE INDEX asset_idFromProvider IF NOT EXISTS FOR (n:Asset) ON (n.idFromProvider)' >>/etc/neo4j/apoc.conf
 echo 'apoc.initializer.neo4j.11=CREATE INDEX control_slug IF NOT EXISTS FOR (c:Control) ON c.slug' >>/etc/neo4j/apoc.conf

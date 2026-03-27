@@ -56,3 +56,9 @@ variable "user_data_replace_on_change" {
   type        = bool
   default     = false
 }
+
+variable "neo4j_major_version" {
+  description = "The major version of Neo4j to install"
+  type        = string
+  default     = "5"
+}

@@ -50,3 +50,9 @@ variable "backup_bucket" {
   type        = string
   description = "The name of the bucket in which to store the neo4j backups"
 }
+
+variable "user_data_replace_on_change" {
+  description = "Whether to recreate the instance when user_data changes"
+  type        = bool
+  default     = false
+}

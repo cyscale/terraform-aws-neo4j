@@ -6,9 +6,6 @@ sleep 30
 dnf update -y
 dnf install -y smart-restart amazon-cloudwatch-agent
 
-# Forward all logs to the console
-exec > >(tee /var/log/user-data.log | logger -t user-data-extra -s 2>/dev/console) 2>&1
-
 # Setup the prometheus scraping for neo4j
 aws ssm get-parameter --name ${ssm_prometheus} --output=text --query "Parameter.Value" >/opt/aws/amazon-cloudwatch-agent/etc/prometheus.yml
 

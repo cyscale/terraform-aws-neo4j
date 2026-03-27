@@ -4,7 +4,7 @@ sleep 30
 # 0 - prepare system and install dependencies
 # https://docs.aws.amazon.com/linux/al2023/ug/managing-repos-os-updates.html#automatic-restart-services
 dnf update -y
-dnf install -y smart-restart
+dnf install -y smart-restart amazon-cloudwatch-agent
 
 # Forward all logs to the console
 exec > >(tee /var/log/user-data.log | logger -t user-data-extra -s 2>/dev/console) 2>&1
@@ -27,6 +27,7 @@ PREFIX=${prefix}
 APOC_VERSION="" # This will be set based on the Neo4j version
 BACKUP_DIR="/home/ec2-user/backups"
 BACKUP_BUCKET=${backup_bucket}
+THIS_PRIVATE_IP=$(ec2-metadata -o | awk -F ': ' '{print $2}')
 FQDN=$(ec2-metadata -h | awk -F ': ' '{print $2}')
 
 # 2 - Install Neo4j using dnf and setup repository
@@ -70,7 +71,6 @@ echo "dbms.security.procedures.allowlist=apoc.*" >>/etc/neo4j/neo4j.conf
 
 # 4 - Neo4j Main Configuration
 echo " - [ Neo4j Main (Network & Cluster Configuration ] - "
-THIS_PRIVATE_IP=$(ec2-metadata -o | awk -F ': ' '{print $2}')
 sed -i s/#server.default_listen_address=0.0.0.0/server.default_listen_address=0.0.0.0/g /etc/neo4j/neo4j.conf
 sed -i s/#server.default_advertised_address=localhost/server.default_advertised_address="$FQDN"/g /etc/neo4j/neo4j.conf
 sed -i s/#server.discovery.advertised_address=:5000/server.discovery.advertised_address="$THIS_PRIVATE_IP":5000/g /etc/neo4j/neo4j.conf
